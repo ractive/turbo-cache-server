@@ -3,7 +3,9 @@ use std::{env, time::Duration};
 
 use opentelemetry::metrics::ObservableGauge;
 use opentelemetry::{KeyValue, trace::TracerProvider};
-use opentelemetry_otlp::{MetricExporter, SpanExporter};
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter};
+use opentelemetry_sdk::logs::{SdkLoggerProvider, log_processor_with_async_runtime};
 use opentelemetry_sdk::metrics::{SdkMeterProvider, periodic_reader_with_async_runtime};
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, span_processor_with_async_runtime};
 use opentelemetry_sdk::{Resource, runtime};
@@ -14,7 +16,8 @@ use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_log::LogTracer;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{
-    EnvFilter,
+    EnvFilter, Layer,
+    filter::filter_fn,
     fmt::{self, MakeWriter},
     layer::SubscriberExt,
 };
@@ -25,6 +28,16 @@ fn is_otel_disabled() -> bool {
     env::var("OTEL_SDK_DISABLED")
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// Events emitted by the OTLP export pipeline itself must not be exported
+/// as OTel logs: a failed export would emit new error events that feed
+/// back into the exporter, creating an infinite loop. These events still
+/// reach the console and file logs.
+fn is_otlp_internal_target(target: &str) -> bool {
+    ["opentelemetry", "tonic", "h2", "hyper", "tower"]
+        .iter()
+        .any(|prefix| target.starts_with(prefix))
 }
 
 pub fn get_telemetry_subscriber<Sink>(
@@ -48,6 +61,35 @@ where
             Some(file_layer)
         }
         Err(_) => None,
+    };
+
+    // Export log records over OTLP so logs land in the same
+    // observability backend as traces and metrics
+    let maybe_otel_log_layer = if is_otel_disabled() {
+        None
+    } else {
+        let log_exporter = LogExporter::builder()
+            .with_tonic()
+            .build()
+            .expect("Could not create log exporter");
+
+        let log_processor = log_processor_with_async_runtime::BatchLogProcessor::builder(
+            log_exporter,
+            runtime::Tokio,
+        )
+        .build();
+
+        let logger_provider = SdkLoggerProvider::builder()
+            .with_log_processor(log_processor)
+            .with_resource(get_resource(name, version))
+            .build();
+
+        let log_layer =
+            OpenTelemetryTracingBridge::new(&logger_provider).with_filter(filter_fn(|metadata| {
+                !is_otlp_internal_target(metadata.target())
+            }));
+
+        Some(log_layer)
     };
 
     let maybe_otel_layer = if is_otel_disabled() {
@@ -98,6 +140,7 @@ where
 
     tracing_subscriber::registry()
         .with(maybe_otel_layer)
+        .with(maybe_otel_log_layer)
         .with(env_filter)
         .with(JsonStorageLayer)
         .with(formatting_layer)
@@ -215,4 +258,27 @@ pub fn init_system_metrics(name: &'static str, version: &'static str) -> Option<
         _memory_gauge: memory_gauge,
         _virtual_memory_gauge: virtual_memory_gauge,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_otlp_internal_target;
+
+    #[test]
+    fn filters_out_otlp_export_pipeline_targets() {
+        assert!(is_otlp_internal_target("opentelemetry"));
+        assert!(is_otlp_internal_target("opentelemetry_sdk::logs"));
+        assert!(is_otlp_internal_target("opentelemetry-otlp"));
+        assert!(is_otlp_internal_target("tonic::transport"));
+        assert!(is_otlp_internal_target("h2::codec"));
+        assert!(is_otlp_internal_target("hyper::client"));
+        assert!(is_otlp_internal_target("tower::buffer"));
+    }
+
+    #[test]
+    fn keeps_application_targets() {
+        assert!(!is_otlp_internal_target("decay::routes::artifacts"));
+        assert!(!is_otlp_internal_target("actix_web::middleware"));
+        assert!(!is_otlp_internal_target("log"));
+    }
 }

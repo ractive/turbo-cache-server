@@ -22,6 +22,11 @@ exporters:
   otlphttp/prometheus:
     endpoint: http://prometheus:9090/api/v1/otlp
 
+  # Log records are printed to the collector's own stdout.
+  # Inspect them with `docker compose -f docker-compose.otel.yml logs collector`
+  debug/logs:
+    verbosity: detailed
+
 extensions:
 
 service:
@@ -34,3 +39,7 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [otlphttp/prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug/logs]

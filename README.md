@@ -403,12 +403,32 @@ Turbo Cache Server includes built-in support for [OpenTelemetry](https://opentel
 
 - **Distributed Tracing**: Track request flows through your cache server with detailed span data
 - **Metrics Collection**: Monitor performance metrics like request rates, latencies, and cache hit/miss ratios
+- **Log Export**: Ship application logs as OTel log records, correlated with the trace they were emitted in
 - **OTLP Export**: Supports both gRPC and HTTP protocols for exporting telemetry data
 - **Industry Standard**: Compatible with any OpenTelemetry-compliant backend
 
 ### Service Identification
 
 All traces and metrics are tagged with the service name **`decay`** (the internal Rust crate name). You'll see this identifier in your observability platform when filtering or querying telemetry data.
+
+### Logs
+
+The same log events that are printed to the console are also exported as
+OpenTelemetry log records, so you can query them next to your traces and
+metrics. Log records emitted inside a request span carry the trace and span
+IDs, letting your observability platform link each log line to the
+distributed trace it belongs to.
+
+The log pipeline honors the standard [OTLP exporter](https://opentelemetry.io/docs/specs/otel/protocol/exporter/) and
+[batch processor](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/#batch-logrecord-processor) environment variables, such as
+`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` and `OTEL_BLRP_SCHEDULE_DELAY`. Log
+verbosity is controlled by the `RUST_LOG` environment variable and applies
+to exported log records and console output alike.
+
+Diagnostic events emitted by the OTLP export pipeline itself (the
+`opentelemetry`, `tonic`, `h2`, `hyper` and `tower` crates) are only written
+to the console and are excluded from the exported log records, as re-exporting
+them could feed export failures back into the exporter in an endless loop.
 
 ### Supported Platforms
 
@@ -478,7 +498,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
 cargo run
 ```
 
-Visit Jaeger to see distributed traces and Prometheus to query metrics from your local cache server.
+Visit Jaeger to see distributed traces and Prometheus to query metrics from your local cache server. Exported log records are printed by the collector itself and can be inspected with `docker compose -f docker-compose.otel.yml logs collector`.
 
 ## How does that work?
 
