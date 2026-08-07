@@ -34,6 +34,11 @@ fn is_otel_disabled() -> bool {
 /// as OTel logs: a failed export would emit new error events that feed
 /// back into the exporter, creating an infinite loop. These events still
 /// reach the console and file logs.
+///
+/// The hyper/h2 targets are shared with the S3 client's HTTP stack, so
+/// its transport-level events are excluded from export as well: there is
+/// no way to tell which subsystem emitted an event, and suppressing too
+/// much is the safe direction for loop prevention.
 fn is_otlp_internal_target(target: &str) -> bool {
     ["opentelemetry", "tonic", "h2", "hyper", "tower"]
         .iter()
@@ -273,6 +278,13 @@ mod tests {
         assert!(is_otlp_internal_target("h2::codec"));
         assert!(is_otlp_internal_target("hyper::client"));
         assert!(is_otlp_internal_target("tower::buffer"));
+        // The prefix matching must keep covering the underscore-variants
+        // of these crates, which log under their own targets
+        assert!(is_otlp_internal_target(
+            "hyper_util::client::legacy::connect"
+        ));
+        assert!(is_otlp_internal_target("hyper_timeout"));
+        assert!(is_otlp_internal_target("tower_http::trace"));
     }
 
     #[test]

@@ -417,7 +417,9 @@ The same log events that are printed to the console are also exported as
 OpenTelemetry log records, so you can query them next to your traces and
 metrics. Log records emitted inside a request span carry the trace and span
 IDs, letting your observability platform link each log line to the
-distributed trace it belongs to.
+distributed trace it belongs to. Note that events emitted inside a span also
+remain attached to the exported trace as span events, so backends will show
+them in both places.
 
 The log pipeline honors the standard [OTLP exporter](https://opentelemetry.io/docs/specs/otel/protocol/exporter/) and
 [batch processor](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/#batch-logrecord-processor) environment variables, such as
@@ -425,10 +427,14 @@ The log pipeline honors the standard [OTLP exporter](https://opentelemetry.io/do
 verbosity is controlled by the `RUST_LOG` environment variable and applies
 to exported log records and console output alike.
 
-Diagnostic events emitted by the OTLP export pipeline itself (the
-`opentelemetry`, `tonic`, `h2`, `hyper` and `tower` crates) are only written
-to the console and are excluded from the exported log records, as re-exporting
-them could feed export failures back into the exporter in an endless loop.
+Events emitted by the `opentelemetry`, `tonic`, `h2`, `hyper` and `tower`
+crates are only written to the console and are excluded from the exported log
+records, no matter which subsystem triggered them. These crates make up the
+OTLP export pipeline, and re-exporting their events could feed export failures
+back into the exporter in an endless loop. Since the S3 client shares parts of
+this HTTP stack, its transport-level events (like `hyper` connection errors
+during artifact transfers) are excluded from export as well — application-level
+S3 errors are logged under `decay::*` targets and are always exported.
 
 ### Supported Platforms
 
